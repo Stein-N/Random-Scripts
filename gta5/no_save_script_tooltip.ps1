@@ -7,20 +7,27 @@
 # License: MIT
 
 
+# Configuration
+$FirewallRuleName = "GTA_5_No_Save"
 
-# --- Konfiguration ---
-$RuleName = "No_Save"   # DisplayName for the Firewall rule
 
-# --- self-elevation: scripts restarts as admin and with a hidden console ---
-$identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
+# Elevate the Script to a admin powershell window, this is needed since the Frame needs to listen to keystrokes
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
-    Start-Process powershell.exe -Verb RunAs -ArgumentList `
-        "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`""
+    Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`""
     exit
 }
 
-# --- Status-Frame + Hotkeys ---
+# Check if outgoing firewall rule is already set.
+# If the rule not exists it will be added
+$rule = Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue
+if (-not $rule) {
+    New-NetFirewallRule -DisplayName $FirewallRuleName -Direction Outbound -Action Block -RemoteAddress 192.81.241.171 -Profile Any -Protocol Any -Enabled False
+}
+
+# Create the Tooltip Frame
+# This also contains the main logic for 
 Add-Type @'
 using System;
 using System.Drawing;
@@ -44,29 +51,39 @@ public class StatusForm : Form {
     public const int ID_QUIT    = 3;
 
     public event Action<int> HotKeyPressed;
-    private Label lbl;
+    private Label lblPrefix;
+    private Label lblStatus;
 
     public StatusForm() {
         this.FormBorderStyle = FormBorderStyle.None;
-        this.BackColor       = Color.FromArgb(255, 255, 225); // Tooltip-Gelb
+        this.BackColor       = Color.FromArgb(255, 255, 225);
         this.TopMost         = true;
         this.ShowInTaskbar   = false;
         this.StartPosition   = FormStartPosition.Manual;
-        this.Location        = new Point(5, 5);             // oben links
+        this.Location        = new Point(5, 5);
 
-        lbl = new Label();
-        lbl.AutoSize  = true;
-        lbl.Location  = new Point(4, 3);
-        lbl.Font      = new Font("Segoe UI", 9F, FontStyle.Bold);
-        lbl.BackColor = Color.Transparent;
-        this.Controls.Add(lbl);
+        var font = new Font("Segoe UI", 12F, FontStyle.Bold);
+
+        lblPrefix = new Label();
+        lblPrefix.AutoSize  = true;
+        lblPrefix.Location  = new Point(1, 1);
+        lblPrefix.Font      = font;
+        lblPrefix.BackColor = Color.Transparent;
+        lblPrefix.ForeColor = Color.Black;
+        this.Controls.Add(lblPrefix);
+
+        lblStatus = new Label();
+        lblStatus.AutoSize  = true;
+        lblStatus.Font      = font;
+        lblStatus.BackColor = Color.Transparent;
+        this.Controls.Add(lblStatus);
 
         RegisterHotKey(this.Handle, ID_ENABLE,  MOD_CONTROL, VK_F9);
         RegisterHotKey(this.Handle, ID_DISABLE, MOD_CONTROL, VK_F12);
         RegisterHotKey(this.Handle, ID_QUIT,    MOD_CONTROL, VK_F4);
     }
 
-    // Windows is never active -> never steals the focus
+    // Window can never be focused, but will always be on top
     protected override CreateParams CreateParams {
         get {
             CreateParams cp = base.CreateParams;
@@ -75,18 +92,20 @@ public class StatusForm : Form {
         }
     }
 
-    public void SetStatus(string text, Color color) {
-        if (this.InvokeRequired) { this.Invoke(new Action(() => SetStatus(text, color))); return; }
-        lbl.Text      = text;
-        lbl.ForeColor = color;
-        this.ClientSize = new Size(lbl.PreferredWidth + 4, lbl.PreferredHeight + 2);
+    public void SetStatus(string prefix, string status, Color statusColor) {
+        if (this.InvokeRequired) { this.Invoke(new Action(() => SetStatus(prefix, status, statusColor))); return; }
+        lblPrefix.Text     = prefix;
+        lblStatus.Text     = status;
+        lblStatus.ForeColor = statusColor;
+        lblStatus.Location = new Point(lblPrefix.PreferredWidth + 1, 1);
+        this.ClientSize    = new Size(lblPrefix.PreferredWidth + lblStatus.PreferredWidth + 2, lblPrefix.PreferredHeight);
         this.Invalidate();
     }
 
     protected override void OnPaint(PaintEventArgs e) {
         base.OnPaint(e);
-        using (Pen p = new Pen(Color.FromArgb(118, 118, 118))) {
-            e.Graphics.DrawRectangle(p, 0, 0, this.Width - 1, this.Height - 1);
+        using (Pen p = new Pen(Color.FromArgb(255, 255, 255))) {
+            e.Graphics.DrawRectangle(p, 0, 0, this.Width, this.Height);
         }
     }
 
@@ -105,28 +124,28 @@ public class StatusForm : Form {
 }
 '@ -ReferencedAssemblies System.Windows.Forms, System.Drawing
 
-# --- Show the Status - Reads the Firewall rule if it is active or not ---
+# Set the Text inside the Tooltip
 function Show-Status {
-    $rule = Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue
+    $rule = Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue
     if (-not $rule) {
-        $form.SetStatus("Rule '$RuleName' not found", [System.Drawing.Color]::Red)
+        $form.SetStatus("Rule '$FirewallRuleName' :", "not found", [System.Drawing.Color]::Red)
         return
     }
     if ($rule.Enabled -eq "True") {
-        $form.SetStatus("$RuleName : Active",   [System.Drawing.Color]::Green)
+        $form.SetStatus("$FirewallRuleName :", "Active", [System.Drawing.Color]::Green)
     } else {
-        $form.SetStatus("$RuleName : Inactive", [System.Drawing.Color]::Red)
+        $form.SetStatus("$FirewallRuleName :", "Inactive", [System.Drawing.Color]::Red)
     }
 }
 
-# --- set the rule to active or inactive ---
+# Change the rule status
 function Set-Rule([bool]$enable) {
-    if (-not (Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue)) {
+    if (-not (Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue)) {
         Show-Status
         return
     }
-    if ($enable) { Enable-NetFirewallRule  -DisplayName $RuleName }
-    else         { Disable-NetFirewallRule -DisplayName $RuleName }
+    if ($enable) { Enable-NetFirewallRule  -DisplayName $FirewallRuleName }
+    else         { Disable-NetFirewallRule -DisplayName $FirewallRuleName }
     Show-Status
 }
 
@@ -141,14 +160,15 @@ $form.add_HotKeyPressed({
 })
 
 $form.Show()
-Show-Status   # Shows the Status at the beginning
+# Show the inital state of the rule, should always be inactive and present
+Show-Status
 
 try {
     [System.Windows.Forms.Application]::Run($form)
 }
 finally {
-    # Rule gets deactivated when closing to prevent it from beeing active after usage
-    if (Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue) {
-        Disable-NetFirewallRule -DisplayName $RuleName
+    # Deactivate rule when closing the script
+    if (Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue) {
+        Disable-NetFirewallRule -DisplayName $FirewallRuleName
     }
 }
