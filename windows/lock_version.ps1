@@ -3,6 +3,14 @@
 #   Locks the freshly installed windows 11 to the currentz feature version, any security patch will be installed normaly.
 # License: MIT
 
+# Elevate Script to be Admin
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
+    Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`""
+    exit
+}
+
 # 1. Read current Windows version (f.e. 25H2)
 $currentVersion = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion").DisplayVersion
 
