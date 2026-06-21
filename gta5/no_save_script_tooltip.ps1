@@ -12,7 +12,9 @@ $FirewallRuleName = "GTA_5_No_Save"
 
 
 # Elevate the Script to a admin powershell window, this is needed since the Frame needs to listen to keystrokes
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
     Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`""
     exit
 }
@@ -24,7 +26,8 @@ if (-not $rule) {
     New-NetFirewallRule -DisplayName $FirewallRuleName -Direction Outbound -Action Block -RemoteAddress 192.81.241.171 -Profile Any -Protocol Any -Enabled False
 }
 
-# Create the Tooltip Frame and register global hotkeys
+# Create the Tooltip Frame
+# This also contains the main logic for 
 Add-Type @'
 using System;
 using System.Drawing;
@@ -90,12 +93,20 @@ public class StatusForm : Form {
     }
 
     public void SetStatus(string prefix, string status, Color statusColor) {
+        if (this.InvokeRequired) { this.Invoke(new Action(() => SetStatus(prefix, status, statusColor))); return; }
         lblPrefix.Text     = prefix;
         lblStatus.Text     = status;
         lblStatus.ForeColor = statusColor;
         lblStatus.Location = new Point(lblPrefix.PreferredWidth + 1, 1);
         this.ClientSize    = new Size(lblPrefix.PreferredWidth + lblStatus.PreferredWidth + 2, lblPrefix.PreferredHeight);
         this.Invalidate();
+    }
+
+    protected override void OnPaint(PaintEventArgs e) {
+        base.OnPaint(e);
+        using (Pen p = new Pen(Color.FromArgb(255, 255, 255))) {
+            e.Graphics.DrawRectangle(p, 0, 0, this.Width, this.Height);
+        }
     }
 
     protected override void WndProc(ref Message m) {
@@ -149,7 +160,7 @@ $form.add_HotKeyPressed({
 })
 
 $form.Show()
-# Show the initial state of the rule, should always be inactive and present
+# Show the inital state of the rule, should always be inactive and present
 Show-Status
 
 try {
